@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Sendspin/sendspin-go/internal/discovery"
+	"github.com/Sendspin/sendspin-go/pkg/discovery"
 )
 
 func TestClientInfoURL(t *testing.T) {

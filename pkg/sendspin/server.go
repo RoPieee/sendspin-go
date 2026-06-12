@@ -14,8 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Sendspin/sendspin-go/internal/discovery"
 	"github.com/Sendspin/sendspin-go/internal/server"
+	"github.com/Sendspin/sendspin-go/pkg/discovery"
 	"github.com/Sendspin/sendspin-go/pkg/protocol"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
