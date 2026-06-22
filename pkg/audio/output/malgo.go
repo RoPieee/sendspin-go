@@ -356,8 +356,8 @@ func (m *Malgo) Open(sampleRate, channels, bitDepth int) error {
 	m.bitDepth = bitDepth
 	m.ready = true
 
-	log.Printf("Audio output initialized: device=%s %dHz/%dch/%d-bit period=%dms (malgo/%s)",
-		chosenLabel, sampleRate, channels, bitDepth, deviceConfig.PeriodSizeInMilliseconds, formatName(format))
+	log.Printf("Audio output initialized: device=%s %dHz/%dch/%d-bit period=%dms mode=%s (malgo/%s)",
+		chosenLabel, sampleRate, channels, bitDepth, deviceConfig.PeriodSizeInMilliseconds, shareModeName(m.shareMode), formatName(format))
 
 	return nil
 }
@@ -508,6 +508,13 @@ func (m *Malgo) GetVolume() int {
 
 func (m *Malgo) IsMuted() bool {
 	return m.muted
+}
+
+func shareModeName(m ShareMode) string {
+	if m == ShareModeExclusive {
+		return "exclusive"
+	}
+	return "shared"
 }
 
 func formatName(format malgo.FormatType) string {
