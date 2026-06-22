@@ -65,7 +65,16 @@ func QueryDeviceCapabilities(deviceName string, shareMode ShareMode) (maxSampleR
 		return 0, 0, fmt.Errorf("query device info for %q: %w", chosen.Name, err)
 	}
 
+	if len(detail.Formats) == 0 {
+		log.Printf("Device %q reported no native formats", chosen.Name)
+	} else {
+		for _, f := range detail.Formats {
+			log.Printf("  format: %v %dHz", f.Format, f.SampleRate)
+		}
+	}
+
 	maxRate, maxDepth := capsFromFormats(detail.Formats)
+	log.Printf("Device capability result: %d Hz / %d-bit", maxRate, maxDepth)
 	return maxRate, maxDepth, nil
 }
 
