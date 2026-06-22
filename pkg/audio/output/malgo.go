@@ -32,6 +32,7 @@ type Malgo struct {
 	malgoCtx   *malgo.AllocatedContext
 	device     *malgo.Device
 	deviceName string // empty = use default
+	shareMode  ShareMode
 	sampleRate int
 	channels   int
 	bitDepth   int
@@ -112,16 +113,28 @@ func (rb *RingBuffer) Free() int {
 	return rb.size - rb.count
 }
 
+// ShareMode controls how the audio device is opened by miniaudio.
+// Shared (default) routes through the OS mixer (dmix on Linux/ALSA).
+// Exclusive opens the device directly (hw: on Linux/ALSA), enabling
+// bit-perfect playback and accurate capability probing via DeviceInfo.
+type ShareMode int
+
+const (
+	ShareModeShared    ShareMode = 0
+	ShareModeExclusive ShareMode = 1
+)
+
 // NewMalgo constructs a new malgo-backed audio output. deviceName selects a
 // specific playback device by name (as reported by ListPlaybackDevices). An
 // empty deviceName lets miniaudio pick the platform default.
-func NewMalgo(deviceName string) Output {
+func NewMalgo(deviceName string, shareMode ShareMode) Output {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Malgo{
 		ctx:        ctx,
 		cancel:     cancel,
 		deviceName: deviceName,
+		shareMode:  shareMode,
 		volume:     100,
 		muted:      false,
 	}
@@ -259,6 +272,7 @@ func (m *Malgo) Open(sampleRate, channels, bitDepth int) error {
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Playback)
 	deviceConfig.Playback.Format = format
 	deviceConfig.Playback.Channels = uint32(channels)
+	deviceConfig.Playback.ShareMode = malgo.ShareMode(m.shareMode)
 	deviceConfig.SampleRate = uint32(sampleRate)
 	deviceConfig.Alsa.NoMMap = 1
 	// Pin the period to 20 ms instead of miniaudio's default low-latency

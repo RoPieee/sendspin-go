@@ -23,7 +23,7 @@ import (
 //
 // Does NOT InitDevice. Cheaper than opening the device, but the trade-off is
 // that the answer is a best-guess from miniaudio rather than ground truth.
-func QueryDeviceCapabilities(deviceName string) (maxSampleRate, maxBitDepth int, err error) {
+func QueryDeviceCapabilities(deviceName string, shareMode ShareMode) (maxSampleRate, maxBitDepth int, err error) {
 	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
 	if err != nil {
 		return 0, 0, fmt.Errorf("init malgo context: %w", err)
@@ -58,7 +58,7 @@ func QueryDeviceCapabilities(deviceName string) (maxSampleRate, maxBitDepth int,
 		return 0, 0, nil
 	}
 
-	detail, err := ctx.DeviceInfo(malgo.Playback, chosen.ID, malgo.Shared)
+	detail, err := ctx.DeviceInfo(malgo.Playback, chosen.ID, malgo.ShareMode(shareMode))
 	if err != nil {
 		return 0, 0, fmt.Errorf("query device info for %q: %w", chosen.Name, err)
 	}

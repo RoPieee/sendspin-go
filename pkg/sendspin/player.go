@@ -93,6 +93,12 @@ type PlayerConfig struct {
 
 	OnError func(error)
 
+	// ShareMode controls how the audio device is opened by miniaudio.
+	// output.ShareModeShared (default) routes through the OS mixer (dmix on Linux/ALSA).
+	// output.ShareModeExclusive opens the device directly (hw: on Linux/ALSA), enabling
+	// bit-perfect playback and accurate capability probing.
+	ShareMode output.ShareMode
+
 	// Output overrides the default audio output backend.
 	// When nil, a malgo-backed output is created on stream start.
 	Output output.Output
@@ -267,7 +273,7 @@ func (p *Player) ensureCapsResolved() {
 		return
 	}
 
-	rate, depth, err := output.QueryDeviceCapabilities(p.config.AudioDevice)
+	rate, depth, err := output.QueryDeviceCapabilities(p.config.AudioDevice, p.config.ShareMode)
 	if err != nil {
 		log.Printf("Output capability probe failed (%v); advertising full format list", err)
 		return
@@ -375,7 +381,7 @@ func jitter(d time.Duration, frac float64) time.Duration {
 
 func (p *Player) onStreamStart(format audio.Format) {
 	if p.output == nil {
-		p.output = output.NewMalgo(p.config.AudioDevice)
+		p.output = output.NewMalgo(p.config.AudioDevice, p.config.ShareMode)
 	}
 
 	if err := p.output.Open(format.SampleRate, format.Channels, format.BitDepth); err != nil {
