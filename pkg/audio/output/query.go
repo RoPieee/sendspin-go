@@ -60,7 +60,7 @@ func QueryDeviceCapabilities(deviceName string, shareMode ShareMode) (maxSampleR
 	}
 
 	log.Printf("Probing device capabilities: %q (mode=%s)", chosen.Name, shareModeName(shareMode))
-	detail, err := ctx.DeviceInfo(malgo.Playback, chosen.ID, malgo.ShareMode(shareMode))
+	detail, err := ctx.DeviceInfoEx(malgo.Playback, chosen.ID, malgo.ShareMode(shareMode))
 	if err != nil {
 		return 0, 0, fmt.Errorf("query device info for %q: %w", chosen.Name, err)
 	}
