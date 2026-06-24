@@ -3,6 +3,19 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 This guidance is aimed at Claude Code but may also be suitable for other AI tooling, such as GitHub Copilot and OpenAI Codex.
 
+## RoPieee Fork (`github.com/RoPieee/sendspin-go`)
+
+This fork adds two independent features, each on its own branch and merged into `main`:
+
+| Branch | Change | Upstream PR |
+|---|---|---|
+| `feature/alsa-exclusive-mode` | `ShareMode` in `PlayerConfig`; `DeviceInfoEx` probe via RoPieee/malgo | Pending (#143) |
+| `feature/before-stream-start` | `BeforeStreamStart func(audio.Format)` in `PlayerConfig` | Pending |
+
+**`feature/alsa-exclusive-mode`** — `ShareMode output.ShareMode` field in `PlayerConfig`; passed to both `output.NewMalgo` (device open) and `output.QueryDeviceCapabilities` (probe). Requires `replace github.com/gen2brain/malgo => github.com/RoPieee/malgo` in `go.mod` for the `DeviceInfoEx` method.
+
+**`feature/before-stream-start`** — `BeforeStreamStart func(audio.Format)` field in `PlayerConfig`; called synchronously at the top of `onStreamStart`, before `p.output.Open()`. Allows callers to block device open until setup (e.g. convenience switching) is complete.
+
 ## Project Overview
 
 `sendspin-go` is the Go implementation of the [Sendspin Protocol](https://github.com/Sendspin/website/blob/main/src/spec.md) for synchronized multi-room audio streaming. It ships as a library (`pkg/`) plus two CLI binaries: `sendspin-player` (root `main.go`) and `sendspin-server` (`./cmd/sendspin-server`). The Python sibling is [`aiosendspin`](https://github.com/Sendspin/aiosendspin); the two implementations are wire-compatible and share the role-family vocabulary (`player`, `controller`, `metadata`, `artwork`, `visualizer`).
