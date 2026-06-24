@@ -93,6 +93,13 @@ type PlayerConfig struct {
 
 	OnError func(error)
 
+	// BeforeStreamStart is called synchronously before the audio device is
+	// opened on each stream start. It blocks device open until it returns,
+	// giving callers time to perform setup such as releasing the device from
+	// another service. Only called when a stream actually begins — not on
+	// reconnects that don't result in a new stream.
+	BeforeStreamStart func(audio.Format)
+
 	// Output overrides the default audio output backend.
 	// When nil, a malgo-backed output is created on stream start.
 	Output output.Output
@@ -374,6 +381,10 @@ func jitter(d time.Duration, frac float64) time.Duration {
 }
 
 func (p *Player) onStreamStart(format audio.Format) {
+	if p.config.BeforeStreamStart != nil {
+		p.config.BeforeStreamStart(format)
+	}
+
 	if p.output == nil {
 		p.output = output.NewMalgo(p.config.AudioDevice)
 	}
