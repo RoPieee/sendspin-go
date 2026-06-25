@@ -38,9 +38,14 @@ type ReceiverConfig struct {
 	PreferredCodec string
 	BufferCapacity int // buffer_capacity in bytes advertised to the server (default: 1048576 = 1MB
 	// MaxSampleRate caps the highest SampleRate advertised to the server. 0 = no cap.
+	// Ignored when NativeSampleRates is non-nil.
 	MaxSampleRate int
-	// MaxBitDepth caps the highest BitDepth advertised to the server.  0 = no cap.
+	// MaxBitDepth caps the highest BitDepth advertised to the server. 0 = no cap.
 	MaxBitDepth int
+	// NativeSampleRates is the probe-derived list of native rates (sorted ascending).
+	// When non-nil, the format list is built from these rates instead of the
+	// hardcoded fallback list. MaxBitDepth is still applied as a cap.
+	NativeSampleRates []int
 	// ClientID is the already-resolved client_id to advertise in client/hello.
 	ClientID       string
 	DeviceInfo     DeviceInfo
@@ -171,8 +176,8 @@ func (r *Receiver) Connect() error {
 		return fmt.Errorf("ReceiverConfig.ClientID is required (resolve via sendspin.ResolveClientID)")
 	}
 
-	supportedFormats := buildSupportedFormats(r.config.PreferredCodec, r.config.MaxSampleRate, r.config.MaxBitDepth)
-	logAdvertisedFormats(supportedFormats, r.config.MaxSampleRate, r.config.MaxBitDepth)
+	supportedFormats := buildSupportedFormats(r.config.PreferredCodec, r.config.NativeSampleRates, r.config.MaxSampleRate, r.config.MaxBitDepth)
+	logAdvertisedFormats(supportedFormats, r.config.NativeSampleRates != nil)
 
 	clientConfig := protocol.Config{
 		ServerAddr: r.serverAddr,
@@ -669,41 +674,63 @@ drainLoop:
 
 	r.clockSync.ProcessSyncResponse(bestT1, bestT2, bestT3, bestT4)
 }
-func buildSupportedFormats(preferredCodec string, maxSampleRate, maxBitDepth int) []protocol.AudioFormat {
-	allFormats := []protocol.AudioFormat{
-		{Codec: "pcm", Channels: 2, SampleRate: 192000, BitDepth: 24},
-		{Codec: "pcm", Channels: 2, SampleRate: 176400, BitDepth: 24},
-		{Codec: "pcm", Channels: 2, SampleRate: 96000, BitDepth: 24},
-		{Codec: "pcm", Channels: 2, SampleRate: 88200, BitDepth: 24},
-		{Codec: "pcm", Channels: 2, SampleRate: 48000, BitDepth: 16},
-		{Codec: "pcm", Channels: 2, SampleRate: 44100, BitDepth: 16},
-		{Codec: "flac", Channels: 2, SampleRate: 192000, BitDepth: 24},
-		{Codec: "flac", Channels: 2, SampleRate: 96000, BitDepth: 24},
-		{Codec: "flac", Channels: 2, SampleRate: 48000, BitDepth: 24},
-		{Codec: "flac", Channels: 2, SampleRate: 44100, BitDepth: 16},
-		{Codec: "opus", Channels: 2, SampleRate: 48000, BitDepth: 16},
-	}
+func buildSupportedFormats(preferredCodec string, nativeSampleRates []int, maxSampleRate, maxBitDepth int) []protocol.AudioFormat {
+	var allFormats []protocol.AudioFormat
 
-	filtered := make([]protocol.AudioFormat, 0, len(allFormats))
-	for _, f := range allFormats {
-		if maxSampleRate > 0 && f.SampleRate > maxSampleRate {
-			continue
+	if len(nativeSampleRates) > 0 {
+		// Build from probe-derived native rates (sorted ascending).
+		// BitDepth: 24-bit for hi-res (≥88.2kHz), 16-bit otherwise.
+		for _, rate := range nativeSampleRates {
+			bitDepth := 16
+			if rate >= 88200 {
+				bitDepth = 24
+			}
+			if maxBitDepth > 0 && bitDepth > maxBitDepth {
+				bitDepth = maxBitDepth
+			}
+			allFormats = append(allFormats,
+				protocol.AudioFormat{Codec: "pcm", Channels: 2, SampleRate: rate, BitDepth: bitDepth},
+				protocol.AudioFormat{Codec: "flac", Channels: 2, SampleRate: rate, BitDepth: bitDepth},
+			)
+			if rate == 48000 {
+				allFormats = append(allFormats, protocol.AudioFormat{Codec: "opus", Channels: 2, SampleRate: 48000, BitDepth: 16})
+			}
 		}
-		if maxBitDepth > 0 && f.BitDepth > maxBitDepth {
-			continue
+	} else {
+		// Fallback: hardcoded list filtered by maxSampleRate / maxBitDepth.
+		hardcoded := []protocol.AudioFormat{
+			{Codec: "pcm", Channels: 2, SampleRate: 192000, BitDepth: 24},
+			{Codec: "pcm", Channels: 2, SampleRate: 176400, BitDepth: 24},
+			{Codec: "pcm", Channels: 2, SampleRate: 96000, BitDepth: 24},
+			{Codec: "pcm", Channels: 2, SampleRate: 88200, BitDepth: 24},
+			{Codec: "pcm", Channels: 2, SampleRate: 48000, BitDepth: 16},
+			{Codec: "pcm", Channels: 2, SampleRate: 44100, BitDepth: 16},
+			{Codec: "flac", Channels: 2, SampleRate: 192000, BitDepth: 24},
+			{Codec: "flac", Channels: 2, SampleRate: 96000, BitDepth: 24},
+			{Codec: "flac", Channels: 2, SampleRate: 48000, BitDepth: 24},
+			{Codec: "flac", Channels: 2, SampleRate: 44100, BitDepth: 16},
+			{Codec: "opus", Channels: 2, SampleRate: 48000, BitDepth: 16},
 		}
-		filtered = append(filtered, f)
+		for _, f := range hardcoded {
+			if maxSampleRate > 0 && f.SampleRate > maxSampleRate {
+				continue
+			}
+			if maxBitDepth > 0 && f.BitDepth > maxBitDepth {
+				continue
+			}
+			allFormats = append(allFormats, f)
+		}
 	}
 
 	if preferredCodec == "" {
-		return filtered
+		return allFormats
 	}
 
 	// Move preferred codec formats to the front while preserving original
 	// order within each group.
-	preferred := make([]protocol.AudioFormat, 0, len(filtered))
-	rest := make([]protocol.AudioFormat, 0, len(filtered))
-	for _, f := range filtered {
+	preferred := make([]protocol.AudioFormat, 0, len(allFormats))
+	rest := make([]protocol.AudioFormat, 0, len(allFormats))
+	for _, f := range allFormats {
 		if f.Codec == preferredCodec {
 			preferred = append(preferred, f)
 		} else {
@@ -712,13 +739,13 @@ func buildSupportedFormats(preferredCodec string, maxSampleRate, maxBitDepth int
 	}
 	return append(preferred, rest...)
 }
-func logAdvertisedFormats(formats []protocol.AudioFormat, maxSampleRate, maxBitDepth int) {
-	capDesc := "no cap"
-	if maxSampleRate > 0 || maxBitDepth > 0 {
-		capDesc = fmt.Sprintf("cap %dHz/%d-bit", maxSampleRate, maxBitDepth)
+func logAdvertisedFormats(formats []protocol.AudioFormat, fromProbe bool) {
+	source := "hardcoded"
+	if fromProbe {
+		source = "probe"
 	}
 	if len(formats) == 0 {
-		log.Printf("WARNING: advertising 0 supported formats (%s) — handshake will fail; relax the caps", capDesc)
+		log.Printf("WARNING: advertising 0 supported formats (source: %s) — handshake will fail", source)
 		return
 	}
 	codecsSeen := make(map[string]struct{}, 3)
@@ -736,8 +763,8 @@ func logAdvertisedFormats(formats []protocol.AudioFormat, maxSampleRate, maxBitD
 			maxDepth = f.BitDepth
 		}
 	}
-	log.Printf("Advertising %d supported formats: codecs=[%s] max=%dHz/%d-bit (%s)",
-		len(formats), strings.Join(codecsOrdered, ","), maxRate, maxDepth, capDesc)
+	log.Printf("Advertising %d supported formats: codecs=[%s] max=%dHz/%d-bit (source: %s)",
+		len(formats), strings.Join(codecsOrdered, ","), maxRate, maxDepth, source)
 }
 
 func (r *Receiver) notifyError(err error) {
