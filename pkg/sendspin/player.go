@@ -84,6 +84,11 @@ type PlayerConfig struct {
 	// MaxBitDepth caps the highest BitDepth advertised to the server.
 	// 0 = auto-probe. See MaxSampleRate for override semantics.
 	MaxBitDepth int
+	// NativeSampleRates is populated by auto-probe (sorted ascending). When
+	// non-nil the receiver uses these exact rates to build the advertised format
+	// list instead of the hardcoded fallback list.  Set by ensureCapsResolved;
+	// callers should leave it nil to enable auto-probe.
+	NativeSampleRates []int
 
 	DeviceInfo DeviceInfo
 
@@ -234,15 +239,16 @@ func (p *Player) Connect() error {
 func (p *Player) buildReceiver(addr string) (*Receiver, error) {
 	p.ensureCapsResolved()
 	return NewReceiver(ReceiverConfig{
-		ServerAddr:     addr,
-		PlayerName:     p.config.PlayerName,
-		BufferMs:       p.config.BufferMs,
-		StaticDelayMs:  p.config.StaticDelayMs,
-		PreferredCodec: p.config.PreferredCodec,
-		BufferCapacity: p.config.BufferCapacity,
-		MaxSampleRate:  p.config.MaxSampleRate,
-		MaxBitDepth:    p.config.MaxBitDepth,
-		ClientID:       p.config.ClientID,
+		ServerAddr:        addr,
+		PlayerName:        p.config.PlayerName,
+		BufferMs:          p.config.BufferMs,
+		StaticDelayMs:     p.config.StaticDelayMs,
+		PreferredCodec:    p.config.PreferredCodec,
+		BufferCapacity:    p.config.BufferCapacity,
+		MaxSampleRate:     p.config.MaxSampleRate,
+		MaxBitDepth:       p.config.MaxBitDepth,
+		NativeSampleRates: p.config.NativeSampleRates,
+		ClientID:          p.config.ClientID,
 		DeviceInfo:     p.config.DeviceInfo,
 		DecoderFactory: p.config.DecoderFactory,
 		OnMetadata:     p.config.OnMetadata,
@@ -280,18 +286,19 @@ func (p *Player) ensureCapsResolved() {
 		return
 	}
 
-	rate, depth, err := output.QueryDeviceCapabilities(p.config.AudioDevice, p.config.ShareMode)
+	rates, depth, err := output.QueryDeviceCapabilities(p.config.AudioDevice, p.config.ShareMode)
 	if err != nil {
 		log.Printf("Output capability probe failed (%v); advertising full format list", err)
 		return
 	}
-	if rate == 0 && depth == 0 {
+	if len(rates) == 0 {
 		log.Printf("Output capability probe returned no native formats; advertising full format list")
 		return
 	}
-	p.config.MaxSampleRate = rate
+	p.config.NativeSampleRates = rates
 	p.config.MaxBitDepth = depth
-	log.Printf("Output capability cap: %d Hz / %d-bit (source: probe)", rate, depth)
+	p.config.MaxSampleRate = rates[len(rates)-1] // max, for override-check on reconnect
+	log.Printf("Output capability probe: rates=%v max=%d-bit (source: probe)", rates, depth)
 }
 
 // runReconnectLoop supervises the active receiver and rebuilds it with

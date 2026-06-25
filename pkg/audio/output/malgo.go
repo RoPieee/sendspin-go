@@ -525,6 +525,8 @@ func formatName(format malgo.FormatType) string {
 		return "S24"
 	case malgo.FormatS32:
 		return "S32"
+	case malgo.FormatF32:
+		return "F32"
 	default:
 		return fmt.Sprintf("Unknown(%d)", format)
 	}

@@ -191,7 +191,7 @@ func maxRateAndDepth(formats []protocol.AudioFormat) (int, int) {
 }
 
 func TestBuildSupportedFormats_NoCaps(t *testing.T) {
-	got := buildSupportedFormats("", 0, 0)
+	got := buildSupportedFormats("", nil, 0, 0)
 	if len(got) == 0 {
 		t.Fatal("expected non-empty format list with no caps")
 	}
@@ -205,7 +205,7 @@ func TestBuildSupportedFormats_NoCaps(t *testing.T) {
 }
 
 func TestBuildSupportedFormats_RateCap(t *testing.T) {
-	got := buildSupportedFormats("", 48000, 0)
+	got := buildSupportedFormats("", nil, 48000, 0)
 	if len(got) == 0 {
 		t.Fatal("expected non-empty list with 48000Hz cap")
 	}
@@ -228,7 +228,7 @@ func TestBuildSupportedFormats_RateCap(t *testing.T) {
 }
 
 func TestBuildSupportedFormats_BitDepthCap(t *testing.T) {
-	got := buildSupportedFormats("", 0, 16)
+	got := buildSupportedFormats("", nil, 0, 16)
 	if len(got) == 0 {
 		t.Fatal("expected non-empty list with 16-bit cap")
 	}
@@ -240,7 +240,7 @@ func TestBuildSupportedFormats_BitDepthCap(t *testing.T) {
 }
 
 func TestBuildSupportedFormats_BothCaps(t *testing.T) {
-	got := buildSupportedFormats("", 48000, 16)
+	got := buildSupportedFormats("", nil, 48000, 16)
 	if len(got) == 0 {
 		t.Fatal("expected non-empty list with 48k/16 caps")
 	}
@@ -255,7 +255,7 @@ func TestBuildSupportedFormats_BothCaps(t *testing.T) {
 func TestBuildSupportedFormats_PreferredCodecAfterFilter(t *testing.T) {
 	// Filter eliminates high-res FLAC; the survivor should still be ordered
 	// with FLAC at the front when preferredCodec="flac".
-	got := buildSupportedFormats("flac", 48000, 24)
+	got := buildSupportedFormats("flac", nil, 48000, 24)
 	if len(got) == 0 {
 		t.Fatal("expected non-empty list")
 	}
@@ -266,8 +266,8 @@ func TestBuildSupportedFormats_PreferredCodecAfterFilter(t *testing.T) {
 
 func TestBuildSupportedFormats_CapsAtExactBoundary(t *testing.T) {
 	// maxSampleRate=192000, maxBitDepth=24 should keep everything.
-	full := buildSupportedFormats("", 0, 0)
-	bounded := buildSupportedFormats("", 192000, 24)
+	full := buildSupportedFormats("", nil, 0, 0)
+	bounded := buildSupportedFormats("", nil, 192000, 24)
 	if len(bounded) != len(full) {
 		t.Errorf("boundary cap should keep all formats: full=%d bounded=%d", len(full), len(bounded))
 	}
@@ -277,9 +277,108 @@ func TestBuildSupportedFormats_AggressiveCapEmpty(t *testing.T) {
 	// User asks for ≤ 8000Hz / ≤ 8-bit. Nothing in our list matches; we
 	// honestly return empty rather than fabricating a fallback. The handshake
 	// will fail, which is the right user-visible signal that the cap is wrong.
-	got := buildSupportedFormats("", 8000, 8)
+	got := buildSupportedFormats("", nil, 8000, 8)
 	if len(got) != 0 {
 		t.Errorf("expected empty list for impossible caps, got %d entries", len(got))
+	}
+}
+
+func TestBuildSupportedFormats_NativeRates_Basic(t *testing.T) {
+	rates := []int{44100, 48000, 96000, 192000}
+	got := buildSupportedFormats("", rates, 0, 0)
+	if len(got) == 0 {
+		t.Fatal("expected non-empty format list from native rates")
+	}
+	// Every rate in the input must appear at least once (pcm).
+	for _, want := range rates {
+		found := false
+		for _, f := range got {
+			if f.SampleRate == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected rate %d in format list, not found", want)
+		}
+	}
+	// No rate outside the input list should appear.
+	rateSet := make(map[int]struct{})
+	for _, r := range rates {
+		rateSet[r] = struct{}{}
+	}
+	for _, f := range got {
+		if _, ok := rateSet[f.SampleRate]; !ok {
+			t.Errorf("unexpected rate %d in format list", f.SampleRate)
+		}
+	}
+}
+
+func TestBuildSupportedFormats_NativeRates_BitDepthAssignment(t *testing.T) {
+	rates := []int{44100, 48000, 88200, 96000, 192000, 384000}
+	got := buildSupportedFormats("pcm", rates, 0, 0)
+	for _, f := range got {
+		if f.Codec != "pcm" {
+			continue
+		}
+		if f.SampleRate >= 88200 && f.BitDepth != 24 {
+			t.Errorf("rate %d: expected 24-bit, got %d", f.SampleRate, f.BitDepth)
+		}
+		if f.SampleRate < 88200 && f.BitDepth != 16 {
+			t.Errorf("rate %d: expected 16-bit, got %d", f.SampleRate, f.BitDepth)
+		}
+	}
+}
+
+func TestBuildSupportedFormats_NativeRates_OpusOnly48k(t *testing.T) {
+	rates := []int{44100, 48000, 96000}
+	got := buildSupportedFormats("", rates, 0, 0)
+	for _, f := range got {
+		if f.Codec == "opus" && f.SampleRate != 48000 {
+			t.Errorf("opus must only appear at 48000Hz, got %d", f.SampleRate)
+		}
+	}
+	hasOpus := false
+	for _, f := range got {
+		if f.Codec == "opus" {
+			hasOpus = true
+		}
+	}
+	if !hasOpus {
+		t.Error("expected opus entry at 48000Hz")
+	}
+}
+
+func TestBuildSupportedFormats_NativeRates_BitDepthCap(t *testing.T) {
+	rates := []int{44100, 48000, 96000, 192000}
+	got := buildSupportedFormats("", rates, 0, 16)
+	for _, f := range got {
+		if f.BitDepth > 16 {
+			t.Errorf("expected all entries ≤16-bit with maxBitDepth=16, got %s %dHz %d-bit",
+				f.Codec, f.SampleRate, f.BitDepth)
+		}
+	}
+}
+
+func TestBuildSupportedFormats_NativeRates_HighRates(t *testing.T) {
+	// Rates above the old 192kHz hardcoded ceiling should be included.
+	rates := []int{44100, 48000, 96000, 192000, 352800, 384000}
+	got := buildSupportedFormats("", rates, 0, 0)
+	has352 := false
+	has384 := false
+	for _, f := range got {
+		if f.SampleRate == 352800 {
+			has352 = true
+		}
+		if f.SampleRate == 384000 {
+			has384 = true
+		}
+	}
+	if !has352 {
+		t.Error("expected 352800Hz in format list")
+	}
+	if !has384 {
+		t.Error("expected 384000Hz in format list")
 	}
 }
 
