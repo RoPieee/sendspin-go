@@ -11,10 +11,13 @@ This fork adds two independent features, each on its own branch and merged into 
 |---|---|---|
 | `feature/alsa-exclusive-mode` | `ShareMode` in `PlayerConfig`; `DeviceInfoEx` probe via RoPieee/malgo | Pending (#143) |
 | `feature/before-stream-start` | `BeforeStreamStart func(audio.Format)` in `PlayerConfig` | Pending |
+| `feature/native-format-list` | Probe-derived native rate list replaces hardcoded 192 kHz ceiling in `buildSupportedFormats` | Pending |
 
 **`feature/alsa-exclusive-mode`** — `ShareMode output.ShareMode` field in `PlayerConfig`; passed to both `output.NewMalgo` (device open) and `output.QueryDeviceCapabilities` (probe). Requires `replace github.com/gen2brain/malgo => github.com/RoPieee/malgo` in `go.mod` for the `DeviceInfoEx` method.
 
 **`feature/before-stream-start`** — `BeforeStreamStart func(audio.Format)` field in `PlayerConfig`; called synchronously at the top of `onStreamStart`, before `p.output.Open()`. Allows callers to block device open until setup (e.g. convenience switching) is complete.
+
+**`feature/native-format-list`** — `QueryDeviceCapabilities` now returns `[]int` (sorted native sample rates) instead of a single `maxSampleRate int`. `NativeSampleRates []int` added to `PlayerConfig` and `ReceiverConfig`. `buildSupportedFormats` builds `pcm`+`flac` entries for each probed rate (plus `opus` at 48 kHz) with bit-depth assigned by rate (≥88.2 kHz → 24-bit, else 16-bit). The hardcoded 192 kHz list is retained as a fallback when no probe result is available. Probe log now sorts formats ascending and decodes `FormatType` integers to names (S16/S24/S32/F32).
 
 ## Project Overview
 
