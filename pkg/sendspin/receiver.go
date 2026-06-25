@@ -678,9 +678,11 @@ func buildSupportedFormats(preferredCodec string, nativeSampleRates []int, maxSa
 	var allFormats []protocol.AudioFormat
 
 	if len(nativeSampleRates) > 0 {
-		// Build from probe-derived native rates (sorted ascending).
+		// Build from probe-derived native rates. Iterate descending so the
+		// server (which picks the first matching entry) selects the highest rate.
 		// BitDepth: 24-bit for hi-res (≥88.2kHz), 16-bit otherwise.
-		for _, rate := range nativeSampleRates {
+		for i := len(nativeSampleRates) - 1; i >= 0; i-- {
+			rate := nativeSampleRates[i]
 			bitDepth := 16
 			if rate >= 88200 {
 				bitDepth = 24

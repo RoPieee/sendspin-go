@@ -360,6 +360,18 @@ func TestBuildSupportedFormats_NativeRates_BitDepthCap(t *testing.T) {
 	}
 }
 
+func TestBuildSupportedFormats_NativeRates_DescendingOrder(t *testing.T) {
+	// Server picks the first entry; highest rate must come first.
+	rates := []int{32000, 44100, 48000, 96000, 192000}
+	got := buildSupportedFormats("pcm", rates, 0, 0)
+	if len(got) == 0 {
+		t.Fatal("expected non-empty list")
+	}
+	if got[0].SampleRate != 192000 {
+		t.Errorf("expected first entry to be 192000Hz (highest), got %d", got[0].SampleRate)
+	}
+}
+
 func TestBuildSupportedFormats_NativeRates_HighRates(t *testing.T) {
 	// Rates above the old 192kHz hardcoded ceiling should be included.
 	rates := []int{44100, 48000, 96000, 192000, 352800, 384000}
