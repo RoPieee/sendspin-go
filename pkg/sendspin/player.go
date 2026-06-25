@@ -419,6 +419,10 @@ func (p *Player) onStreamStart(format audio.Format) {
 }
 
 func (p *Player) onStreamEnd() {
+	if p.output != nil {
+		p.output.Close()
+		p.output = nil
+	}
 	p.state.State = "idle"
 	p.notifyStateChange()
 }
