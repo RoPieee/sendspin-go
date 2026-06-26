@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/Sendspin/sendspin-go/pkg/audio"
@@ -103,6 +104,16 @@ type PlayerConfig struct {
 	// output.ShareModeExclusive opens the device directly (hw: on Linux/ALSA), enabling
 	// bit-perfect playback and accurate capability probing.
 	ShareMode output.ShareMode
+
+	// DeviceRetryAttempts is the number of times the player retries opening
+	// the audio device when it reports "device or resource busy" before
+	// propagating the error to OnError. Retries keep the server connection
+	// alive — no reconnect is needed. Default: 10.
+	DeviceRetryAttempts int
+
+	// DeviceRetryInterval is the wait between device-open retries.
+	// Default: 500ms.
+	DeviceRetryInterval time.Duration
 
 	// BeforeStreamStart is called synchronously before the audio device is
 	// opened on each stream start. It blocks device open until it returns,
@@ -398,12 +409,43 @@ func (p *Player) onStreamStart(format audio.Format) {
 		p.config.BeforeStreamStart(format)
 	}
 
-	if p.output == nil {
-		p.output = output.NewMalgo(p.config.AudioDevice, p.config.ShareMode)
+	retryAttempts := p.config.DeviceRetryAttempts
+	if retryAttempts == 0 {
+		retryAttempts = 10
+	}
+	retryInterval := p.config.DeviceRetryInterval
+	if retryInterval == 0 {
+		retryInterval = 500 * time.Millisecond
 	}
 
-	if err := p.output.Open(format.SampleRate, format.Channels, format.BitDepth); err != nil {
-		p.notifyError(fmt.Errorf("failed to initialize output: %w", err))
+	var openErr error
+	for attempt := 0; attempt <= retryAttempts; attempt++ {
+		if attempt > 0 {
+			log.Printf("Device busy, retrying open (%d/%d)...", attempt, retryAttempts)
+			select {
+			case <-p.ctx.Done():
+				return
+			case <-time.After(retryInterval):
+			}
+		}
+		if p.output == nil {
+			p.output = output.NewMalgo(p.config.AudioDevice, p.config.ShareMode)
+		}
+		openErr = p.output.Open(format.SampleRate, format.Channels, format.BitDepth)
+		if openErr == nil {
+			break
+		}
+		if !isDeviceBusyErr(openErr) {
+			break
+		}
+		// Discard the partially-initialised device so the next attempt starts clean.
+		if p.config.Output == nil {
+			p.output = nil
+		}
+	}
+
+	if openErr != nil {
+		p.notifyError(fmt.Errorf("failed to initialize output: %w", openErr))
 		return
 	}
 
@@ -416,6 +458,10 @@ func (p *Player) onStreamStart(format audio.Format) {
 	p.state.BitDepth = format.BitDepth
 	p.state.State = "playing"
 	p.notifyStateChange()
+}
+
+func isDeviceBusyErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "resource busy")
 }
 
 func (p *Player) onStreamEnd() {
