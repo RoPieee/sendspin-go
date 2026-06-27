@@ -5,19 +5,31 @@ This guidance is aimed at Claude Code but may also be suitable for other AI tool
 
 ## RoPieee Fork (`github.com/RoPieee/sendspin-go`)
 
-This fork adds two independent features, each on its own branch and merged into `main`:
+All changes are merged into `main`. The goal is to upstream everything that is not RoPieee-specific. Changes are grouped by how ready they are for an upstream PR.
 
-| Branch | Change | Upstream PR |
+### Bug fixes — submit immediately
+
+| Change | File(s) | Why |
 |---|---|---|
-| `feature/alsa-exclusive-mode` | `ShareMode` in `PlayerConfig`; `DeviceInfoEx` probe via RoPieee/malgo | Pending (#143) |
-| `feature/before-stream-start` | `BeforeStreamStart func(audio.Format)` in `PlayerConfig` | Pending |
-| `feature/native-format-list` | Probe-derived native rate list replaces hardcoded 192 kHz ceiling in `buildSupportedFormats` | Pending |
+| `sync.Once` in `Player.Close()` and `Receiver.Close()` | `player.go`, `receiver.go` | Concurrent close panics with "close of closed channel" |
+| `onStreamEnd` closes and nils output | `player.go` | Device was never released after stream end |
+| mDNS `browseLoop` dedup by address | `pkg/discovery/mdns.go` | Same server logged every 3 s; `servers` channel filled up |
 
-**`feature/alsa-exclusive-mode`** — `ShareMode output.ShareMode` field in `PlayerConfig`; passed to both `output.NewMalgo` (device open) and `output.QueryDeviceCapabilities` (probe). Requires `replace github.com/gen2brain/malgo => github.com/RoPieee/malgo` in `go.mod` for the `DeviceInfoEx` method.
+### General improvements — submit after bug fixes land
 
-**`feature/before-stream-start`** — `BeforeStreamStart func(audio.Format)` field in `PlayerConfig`; called synchronously at the top of `onStreamStart`, before `p.output.Open()`. Allows callers to block device open until setup (e.g. convenience switching) is complete.
+**`BeforeStreamStart func(audio.Format)` in `PlayerConfig`** (`player.go`) — called synchronously at the top of `onStreamStart` before `output.Open()`. Lets embedders block device open until preconditions are met (release from another service, hardware init, etc.). Generic; not RoPieee-specific.
 
-**`feature/native-format-list`** — `QueryDeviceCapabilities` now returns `[]int` (sorted native sample rates) instead of a single `maxSampleRate int`. `NativeSampleRates []int` added to `PlayerConfig` and `ReceiverConfig`. `buildSupportedFormats` builds `pcm`+`flac` entries for each probed rate (plus `opus` at 48 kHz) with bit-depth assigned by rate (≥88.2 kHz → 24-bit, else 16-bit). The hardcoded 192 kHz list is retained as a fallback when no probe result is available. Probe log now sorts formats ascending and decodes `FormatType` integers to names (S16/S24/S32/F32).
+**Device-busy retry in `onStreamStart`** (`player.go`) — when `output.Open()` returns a "resource busy" error, retries up to `DeviceRetryAttempts` times (default 15) at `DeviceRetryInterval` (default 1 s) before propagating to `OnError`. Keeps the server connection alive during retries, so the Sendspin group stays active. New `PlayerConfig` fields: `DeviceRetryAttempts int`, `DeviceRetryInterval time.Duration`. Useful for any embedder that shares an audio device with other services.
+
+### ALSA exclusive mode — depends on upstream response to #143
+
+**`ShareMode output.ShareMode` in `PlayerConfig`** (`player.go`, `pkg/audio/output/`) — passed to both `output.NewMalgo` (device open) and `output.QueryDeviceCapabilities` (capability probe). Without this, the probe always opens via dmix and reports 48 kHz as the ceiling even for high-res DACs. Requires `replace github.com/gen2brain/malgo => github.com/RoPieee/malgo` in `go.mod` for the `DeviceInfoEx` Go wrapper that passes share mode through to the ALSA-specific path. Upstream issue: https://github.com/Sendspin/sendspin-go/issues/143.
+
+**Native format list** (`pkg/audio/output/query.go`, `pkg/sendspin/receiver.go`, `player.go`) — `QueryDeviceCapabilities` now returns `([]int, int, error)` (sorted native sample rates + max bit depth). `NativeSampleRates []int` added to `PlayerConfig` and `ReceiverConfig`. `buildSupportedFormats` builds `pcm`+`flac` entries for each probed rate (plus `opus` at 48 kHz only), iterated descending so the server picks the highest rate first; bit-depth ≥88.2 kHz → 24-bit, else 16-bit. Hardcoded 192 kHz fallback list retained when no probe result is available. Depends on `ShareMode` for accurate probing in exclusive mode.
+
+### Spec issue to raise against https://github.com/Sendspin/spec
+
+`stream/start` carries the server-chosen format but not the source material's native rate. A player wanting bit-perfect playback must blindly send `stream/request-format` without knowing whether that rate matches the source. Proposed addition: `native_sample_rate` (and optionally `native_bit_depth`) in the `stream/start` player object, allowing a client to immediately re-request the native rate and avoid upsampling.
 
 ## Project Overview
 
