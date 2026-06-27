@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	stdsync "sync"
 	"strings"
 	"time"
 
@@ -187,6 +188,7 @@ type Player struct {
 	state        PlayerState
 	ctx          context.Context
 	cancel       context.CancelFunc
+	closeOnce    stdsync.Once
 	capsResolved bool // probe runs once at first Connect; reconnects reuse the cached caps
 }
 
@@ -582,20 +584,21 @@ func (p *Player) Stats() PlayerStats {
 }
 
 func (p *Player) Close() error {
-	p.cancel()
+	p.closeOnce.Do(func() {
+		p.cancel()
 
-	if p.receiver != nil {
-		p.receiver.Close()
-	}
+		if p.receiver != nil {
+			p.receiver.Close()
+		}
 
-	if p.output != nil {
-		p.output.Close()
-	}
+		if p.output != nil {
+			p.output.Close()
+		}
 
-	p.state.Connected = false
-	p.state.State = "idle"
-	p.notifyStateChange()
-
+		p.state.Connected = false
+		p.state.State = "idle"
+		p.notifyStateChange()
+	})
 	return nil
 }
 

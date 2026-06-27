@@ -83,6 +83,7 @@ type Receiver struct {
 	mergedMetadata  Metadata
 	pendingMetadata []*protocol.MetadataState
 	clockNow        func() int64
+	closeOnce       stdsync.Once
 }
 
 func NewReceiver(config ReceiverConfig) (*Receiver, error) {
@@ -803,7 +804,7 @@ func (r *Receiver) Close() error {
 		}
 	}
 
-	close(r.output)
+	r.closeOnce.Do(func() { close(r.output) })
 
 	return nil
 }
