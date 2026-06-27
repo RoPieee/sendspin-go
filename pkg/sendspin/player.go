@@ -411,11 +411,11 @@ func (p *Player) onStreamStart(format audio.Format) {
 
 	retryAttempts := p.config.DeviceRetryAttempts
 	if retryAttempts == 0 {
-		retryAttempts = 10
+		retryAttempts = 15
 	}
 	retryInterval := p.config.DeviceRetryInterval
 	if retryInterval == 0 {
-		retryInterval = 500 * time.Millisecond
+		retryInterval = 1 * time.Second
 	}
 
 	var openErr error
