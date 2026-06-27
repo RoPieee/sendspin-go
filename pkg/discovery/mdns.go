@@ -139,6 +139,7 @@ func (m *Manager) Browse() error {
 }
 
 func (m *Manager) browseLoop() {
+	var lastAddr string
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -147,8 +148,10 @@ func (m *Manager) browseLoop() {
 		}
 
 		entries := make(chan *mdns.ServiceEntry, 10)
+		found := make(chan *ServerInfo, 10)
 
 		go func() {
+			defer close(found)
 			for entry := range entries {
 				// hashicorp/mdns is promiscuous: any multicast response arriving
 				// on the socket during the query window is forwarded, regardless
@@ -160,19 +163,10 @@ func (m *Manager) browseLoop() {
 				if entry.AddrV4 == nil || entry.Port == 0 {
 					continue
 				}
-
-				server := &ServerInfo{
+				found <- &ServerInfo{
 					Name: entry.Name,
 					Host: entry.AddrV4.String(),
 					Port: entry.Port,
-				}
-
-				log.Printf("Discovered server: %s at %s:%d", server.Name, server.Host, server.Port)
-
-				select {
-				case m.servers <- server:
-				case <-m.ctx.Done():
-					return
 				}
 			}
 		}()
@@ -187,6 +181,21 @@ func (m *Manager) browseLoop() {
 
 		mdns.Query(params)
 		close(entries)
+
+		// Process results after the goroutine has finished — safe to compare lastAddr.
+		for server := range found {
+			addr := fmt.Sprintf("%s:%d", server.Host, server.Port)
+			if addr == lastAddr {
+				continue
+			}
+			lastAddr = addr
+			log.Printf("Discovered server: %s at %s:%d", server.Name, server.Host, server.Port)
+			select {
+			case m.servers <- server:
+			case <-m.ctx.Done():
+				return
+			}
+		}
 	}
 }
 
