@@ -6,6 +6,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/Sendspin/sendspin-go/pkg/audio/output"
 )
 
 // TestPlayer_RequestFormatNotConnected guards #127: RequestFormat must fail
@@ -230,22 +232,46 @@ func TestPlayer_StatusBeforeConnect(t *testing.T) {
 	}
 }
 
-// TestPlayer_EnsureCapsResolved_ExplicitOverrideSkipsProbe asserts replace
-// semantics: if the user has set either MaxSampleRate or MaxBitDepth,
-// ensureCapsResolved must NOT overwrite the other field via probe.
-// Explicit user choice wins entirely, even when only one of the two
-// fields is non-zero.
-func TestPlayer_EnsureCapsResolved_ExplicitOverrideSkipsProbe(t *testing.T) {
+// TestPlayer_EnsureCapsResolved_CapsFilterProbeResults verifies that
+// MaxSampleRate and MaxBitDepth act as post-probe caps: the probe always runs,
+// and its results are filtered down to the configured ceiling.
+func TestPlayer_EnsureCapsResolved_CapsFilterProbeResults(t *testing.T) {
+	probeRates := []int{44100, 48000, 96000, 192000}
+	probeDepth := 24
+
 	tests := []struct {
-		name      string
-		rate      int
-		depth     int
-		wantRate  int
-		wantDepth int
+		name          string
+		maxRate       int
+		maxDepth      int
+		wantRates     []int
+		wantMaxRate   int
+		wantMaxDepth  int
 	}{
-		{"both set", 48000, 16, 48000, 16},
-		{"rate only", 96000, 0, 96000, 0},
-		{"depth only", 0, 16, 0, 16},
+		{
+			name:         "no cap: all rates kept",
+			maxRate:      0, maxDepth: 0,
+			wantRates: []int{44100, 48000, 96000, 192000}, wantMaxRate: 192000, wantMaxDepth: 24,
+		},
+		{
+			name:         "rate cap at 48k: hi-res rates discarded",
+			maxRate:      48000, maxDepth: 0,
+			wantRates: []int{44100, 48000}, wantMaxRate: 48000, wantMaxDepth: 24,
+		},
+		{
+			name:         "depth cap at 16: bit depth clamped",
+			maxRate:      0, maxDepth: 16,
+			wantRates: []int{44100, 48000, 96000, 192000}, wantMaxRate: 192000, wantMaxDepth: 16,
+		},
+		{
+			name:         "both caps applied",
+			maxRate:      48000, maxDepth: 16,
+			wantRates: []int{44100, 48000}, wantMaxRate: 48000, wantMaxDepth: 16,
+		},
+		{
+			name:         "rate cap above probe max: no filtering",
+			maxRate:      384000, maxDepth: 0,
+			wantRates: []int{44100, 48000, 96000, 192000}, wantMaxRate: 192000, wantMaxDepth: 24,
+		},
 	}
 
 	for _, tt := range tests {
@@ -253,30 +279,46 @@ func TestPlayer_EnsureCapsResolved_ExplicitOverrideSkipsProbe(t *testing.T) {
 			player, _ := NewPlayer(PlayerConfig{
 				ServerAddr:    "localhost:8927",
 				PlayerName:    "Test",
-				MaxSampleRate: tt.rate,
-				MaxBitDepth:   tt.depth,
+				MaxSampleRate: tt.maxRate,
+				MaxBitDepth:   tt.maxDepth,
 			})
-			player.ensureCapsResolved()
-			if player.config.MaxSampleRate != tt.wantRate {
-				t.Errorf("MaxSampleRate = %d, want %d (probe must not run)",
-					player.config.MaxSampleRate, tt.wantRate)
+			player.probeFunc = func(_ string, _ output.ShareMode) ([]int, int, error) {
+				return probeRates, probeDepth, nil
 			}
-			if player.config.MaxBitDepth != tt.wantDepth {
-				t.Errorf("MaxBitDepth = %d, want %d (probe must not run)",
-					player.config.MaxBitDepth, tt.wantDepth)
+			player.ensureCapsResolved()
+
+			if !slicesEqual(player.config.NativeSampleRates, tt.wantRates) {
+				t.Errorf("NativeSampleRates = %v, want %v", player.config.NativeSampleRates, tt.wantRates)
+			}
+			if player.config.MaxSampleRate != tt.wantMaxRate {
+				t.Errorf("MaxSampleRate = %d, want %d", player.config.MaxSampleRate, tt.wantMaxRate)
+			}
+			if player.config.MaxBitDepth != tt.wantMaxDepth {
+				t.Errorf("MaxBitDepth = %d, want %d", player.config.MaxBitDepth, tt.wantMaxDepth)
 			}
 		})
 	}
 }
 
+func slicesEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // TestPlayer_EnsureCapsResolved_RunsOnce guards reconnect behavior: the
-// caps are probed at most once. The cached flag is set even on probe-skip
-// paths so subsequent reconnects don't re-probe miniaudio either.
+// caps are probed at most once; subsequent calls are no-ops.
 func TestPlayer_EnsureCapsResolved_RunsOnce(t *testing.T) {
 	player, _ := NewPlayer(PlayerConfig{
 		ServerAddr:    "localhost:8927",
 		PlayerName:    "Test",
-		MaxSampleRate: 48000, // user-set, so no probe
+		MaxSampleRate: 48000,
 	})
 	player.ensureCapsResolved()
 	if !player.capsResolved {

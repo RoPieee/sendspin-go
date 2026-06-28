@@ -75,16 +75,13 @@ type PlayerConfig struct {
 	AudioDevice string
 
 	// MaxSampleRate caps the highest SampleRate advertised to the server.
-	// 0 = auto-probe the AudioDevice for its native ceiling on first Connect.
-	// Setting either MaxSampleRate or MaxBitDepth to a non-zero value disables
-	// auto-probe entirely (replace semantics — explicit user choice wins, even
-	// if it raises the cap above what the probe would have found). Use the
-	// override when the auto-probe is wrong, as on Pi3 where ALSA reports the
-	// bcm2835 onboard headphones accept 192k/24 but the hardware can't
-	// actually drain it.
+	// 0 = advertise whatever the device probe returns.
+	// Non-zero = probe the device as normal, then discard any native rate above
+	// this value before building the format list. Use this when the probe
+	// over-reports capability (e.g. Pi3 bcm2835 claims 192k but cannot drain it).
 	MaxSampleRate int
 	// MaxBitDepth caps the highest BitDepth advertised to the server.
-	// 0 = auto-probe. See MaxSampleRate for override semantics.
+	// 0 = use the probed bit depth. Non-zero = cap probe result to this value.
 	MaxBitDepth int
 	// NativeSampleRates is populated by auto-probe (sorted ascending). When
 	// non-nil the receiver uses these exact rates to build the advertised format
@@ -190,6 +187,7 @@ type Player struct {
 	cancel       context.CancelFunc
 	closeOnce    stdsync.Once
 	capsResolved bool // probe runs once at first Connect; reconnects reuse the cached caps
+	probeFunc    func(string, output.ShareMode) ([]int, int, error) // nil = use output.QueryDeviceCapabilities
 }
 
 func NewPlayer(config PlayerConfig) (*Player, error) {
@@ -271,35 +269,34 @@ func (p *Player) buildReceiver(addr string) (*Receiver, error) {
 	})
 }
 
-// ensureCapsResolved decides MaxSampleRate / MaxBitDepth on first call and
-// caches the decision so subsequent reconnects reuse the same caps without
-// re-probing miniaudio.
+// ensureCapsResolved probes the audio device on first call and caches the
+// result so subsequent reconnects reuse the same caps without re-probing.
 //
-// Replace semantics: any explicit non-zero override on either field skips
-// the probe entirely, so users who want to raise the cap above the device's
-// reported ceiling can. Probe failures are logged and treated as "no cap" —
-// we'd rather advertise too much (and let the device-stall path complain)
-// than refuse to start when the malgo backend is unavailable (e.g. CI).
+// MaxSampleRate and MaxBitDepth act as post-probe caps: the probe always runs,
+// and any probed rates above MaxSampleRate (or depth above MaxBitDepth) are
+// discarded before the format list is built. Probe failures are logged and
+// treated as "no cap" — we'd rather advertise too much than refuse to start
+// when the malgo backend is unavailable (e.g. CI).
 //
-// When config.Output is non-nil, the caller has substituted their own output
-// (test doubles, custom backends), and probing the malgo default device
-// wouldn't tell us anything useful — skip in that case too.
+// When config.Output is non-nil the caller has substituted their own output
+// (test doubles, custom backends); probing the malgo default device would not
+// reflect that backend, so the probe is skipped.
 func (p *Player) ensureCapsResolved() {
 	if p.capsResolved {
 		return
 	}
 	p.capsResolved = true
 
-	if p.config.MaxSampleRate != 0 || p.config.MaxBitDepth != 0 {
-		log.Printf("Output capability cap: %d Hz / %d-bit (source: config)",
-			p.config.MaxSampleRate, p.config.MaxBitDepth)
-		return
-	}
 	if p.config.Output != nil {
 		return
 	}
 
-	rates, depth, err := output.QueryDeviceCapabilities(p.config.AudioDevice, p.config.ShareMode)
+	probeFn := output.QueryDeviceCapabilities
+	if p.probeFunc != nil {
+		probeFn = p.probeFunc
+	}
+
+	rates, depth, err := probeFn(p.config.AudioDevice, p.config.ShareMode)
 	if err != nil {
 		log.Printf("Output capability probe failed (%v); advertising full format list", err)
 		return
@@ -308,9 +305,28 @@ func (p *Player) ensureCapsResolved() {
 		log.Printf("Output capability probe returned no native formats; advertising full format list")
 		return
 	}
+
+	if p.config.MaxSampleRate > 0 {
+		filtered := rates[:0]
+		for _, r := range rates {
+			if r <= p.config.MaxSampleRate {
+				filtered = append(filtered, r)
+			}
+		}
+		rates = filtered
+		if len(rates) == 0 {
+			log.Printf("Output capability probe: all rates filtered by max_sample_rate=%d; advertising full format list", p.config.MaxSampleRate)
+			return
+		}
+	}
+
+	if p.config.MaxBitDepth > 0 && depth > p.config.MaxBitDepth {
+		depth = p.config.MaxBitDepth
+	}
+
 	p.config.NativeSampleRates = rates
 	p.config.MaxBitDepth = depth
-	p.config.MaxSampleRate = rates[len(rates)-1] // max, for override-check on reconnect
+	p.config.MaxSampleRate = rates[len(rates)-1]
 	log.Printf("Output capability probe: rates=%v max=%d-bit (source: probe)", rates, depth)
 }
 
